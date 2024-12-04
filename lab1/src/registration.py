@@ -75,10 +75,7 @@ class RegistrationWindow(QMainWindow):
         last_name = self.last_name_input.text().strip() or None
         second_name = self.second_name_input.text().strip() or None
         address = self.address_input.text().strip() or None
-
-        
-        # print(f'l = {login}, p = {password}, e = {email}, fn = {first_name}, ln = {last_name}, sn = {second_name}, a = {address}')
-        
+             
         # Проверка логина и пароля
         if not validate_login(login):
             QMessageBox.warning(self, "Ошибка", "Некорректный логин (только 4 цифры).")
