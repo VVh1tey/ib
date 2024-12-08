@@ -5,6 +5,7 @@ class DeviceCheckWindow(QMainWindow):
     def __init__(self, db_connection):
         super().__init__()
         self.db_connection = db_connection
+        self.__pc_id = self.get_uuid()
         self.init_ui()
 
     def init_ui(self):
@@ -14,17 +15,20 @@ class DeviceCheckWindow(QMainWindow):
         self.status_label = QLabel(self)
         self.status_label.setGeometry(50, 50, 300, 50)
 
-        uuid_hash = self.get_uuid_hash()
-        if self.check_device(uuid_hash):
-            self.status_label.setText("Device authorized. Access granted.")
+        if self.check_device():
+            self.status_label.setText("Устройство авторизовано.")
         else:
-            self.status_label.setText("Unauthorized device. Access denied.")
+            self.status_label.setText("Устройство не авторизовано. Доступ запрещен.")
 
-    def get_uuid_hash(self):
-        import os
-        uuid_value = str(os.getlogin())
-        return hash_password(uuid_value, hash_password(uuid_value, b"salt"))
-
-    def check_device(self, uuid_hash):
-        result = self.db_connection.validate_device(uuid_hash)
+    def check_device(self):
+        result = self.db_connection.validate_device(hex(int(self.__pc_id)))
         return result is not None
+    
+    @staticmethod
+    def get_uuid():
+        import uuid
+        try:
+            return str(uuid.getnode())
+        except Exception as e:
+            print(f"Ошибка при получении UUID: {e}")
+            return None

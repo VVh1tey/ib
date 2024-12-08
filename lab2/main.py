@@ -1,28 +1,31 @@
 from PyQt6.QtWidgets import QApplication
 from src.db_interactions import DatabaseConnection
 from src.device_check import DeviceCheckWindow
-from src.login import LoginWindow
+from src.action_selection import ActionSelectionWindow
 import sys
+import configparser as cfgp
+import time
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    # Подключение к базе данных
-    db_config = {
-        "host": "10.147.20.167",
-        "port": 5432,
-        "user": "a",
-        "password": "ab",
-        "dbname": "lab_1"
-    }
-    db_connection = DatabaseConnection(db_config)
+    cfg = cfgp.ConfigParser(allow_no_value=False, delimiters='=')
+    cfg.read('db_creds.ini', encoding='utf-8')
+    
+    db_config_read = dict(cfg['read'])
+    db_config_write = dict(cfg['write'])
 
+    db_connection_read = DatabaseConnection(db_config_read)
+    db_connection_write = DatabaseConnection(db_config_write)
+    
     # Проверка устройства
-    device_window = DeviceCheckWindow(db_connection)
+    device_window = DeviceCheckWindow(db_connection_read)
     device_window.show()
 
-    # Окно логина
-    login_window = LoginWindow(db_connection)
-    login_window.show()
-
+    if device_window.check_device():
+        device_window.hide()
+        aw = ActionSelectionWindow(db_connection_write)
+        aw.show()
+        
+        
     sys.exit(app.exec())
