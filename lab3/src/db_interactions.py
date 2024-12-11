@@ -16,6 +16,17 @@ class DatabaseConnection:
         self.cursor.execute("SELECT * FROM valid_pcs WHERE uuid_hash = %s", (uuid_hash,))
         return self.cursor.fetchone()
 
+    def get_userid(self, login):
+        self.cursor.execute("SELECT users.userid FROM users JOIN users_credentials_lab2 uc ON uc.user_creds_id = users.user_creds_id WHERE uc.login = %s",
+                            (login,))
+        
+        return self.cursor.fetchone()
+    
+    def get_fileid(self, filename):
+        self.cursor.execute("SELECT file_id FROM files WHERE files.filename = %s", (filename, ))
+        
+        return self.cursor.fetchone()
+    
     def close(self):
         self.cursor.close()
         self.conn.close()

@@ -15,7 +15,7 @@ class DatabaseConnection:
     def validate_device(self, uuid_hash):
         self.cursor.execute("SELECT * FROM valid_pcs WHERE uuid_hash = %s", (uuid_hash,))
         return self.cursor.fetchone()
-
+    
     def close(self):
         self.cursor.close()
         self.conn.close()

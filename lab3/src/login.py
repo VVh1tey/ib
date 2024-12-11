@@ -40,10 +40,11 @@ class LoginWindow(QMainWindow):
     def handle_login(self):
         login = self.login_input.text().strip()
         password = self.password_input.text().strip()
-
+        # Проверка логина и пароля
         result = self.db_connection.get_user_credentials(login)
+        user_id = self.db_connection.get_userid(login)
         if result:
-            password_hash, salt, user_id = result
+            password_hash, salt = result
             if check_password(password, password_hash):
                 QMessageBox.information(self, "Успех", "Вы успешно вошли!")
                 self.open_file_manager(user_id, login)
@@ -85,10 +86,6 @@ class LoginWindow(QMainWindow):
         self.file_manager_window = FileManagerWindow(self.db_connection, user_id, username)
         self.file_manager_window.show()
         self.close()
-
-
-
-
 
 class CaptchaWindow(QMainWindow):
     def __init__(self, parent_login_window):

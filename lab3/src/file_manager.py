@@ -39,28 +39,26 @@ class FileManagerWindow(QMainWindow):
         self.edit_button.clicked.connect(self.edit_file)
         layout.addWidget(self.edit_button)
 
-        self.copy_button = QPushButton("Скопировать файл", self)
-        self.copy_button.clicked.connect(self.copy_file)
-        layout.addWidget(self.copy_button)
-
         # Загрузка доступных файлов
         self.load_files()
 
-    def load_files(self):
-        """Загружает список доступных файлов для пользователя."""
-        cursor = self.db_connection.cursor
-        cursor.execute("""
-            SELECT f.fileid, f.filename 
-            FROM files f
-            JOIN permissions p ON f.fileid = p.file_id
-            WHERE p.user_id = %s AND (p.can_read OR p.can_edit OR p.can_copy)
-        """, (self.user_id,))
-        files = cursor.fetchall()
+    # def load_files(self):
+    #     """Загружает список доступных файлов для пользователя."""
+    #     cursor = self.db_connection.cursor
+    #     cursor.execute("""
+    #         SELECT f.fileid, f.filename 
+    #         FROM files f
+    #         JOIN permissions p ON f.fileid = p.file_id
+    #         WHERE p.user_id = %s AND (p.can_read OR p.can_edit OR p.can_copy)
+    #     """, (self.user_id,))
+    #     files = cursor.fetchall()
 
-        # Очистка списка и добавление файлов
-        self.file_list.clear()
-        for file_id, filename in files:
-            self.file_list.addItem(f"{file_id}: {filename}")
+    #     # Очистка списка и добавление файлов
+    #     self.file_list.clear()
+    #     for file_id, filename in files:
+    #         self.file_list.addItem(f"{file_id}: {filename}")
+    def load_files(self):
+        self.file_list.addItem('123')
 
     def open_file(self):
         """Открытие файла для чтения."""
@@ -69,7 +67,9 @@ class FileManagerWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", "Выберите файл!")
             return
 
-        file_id, filename = self.parse_selected_item(selected_item.text())
+        filename = selected_item.text()
+        file_id = self.db_connection.get_fileid(filename)
+        
         if not self.check_permission(file_id, "read"):
             QMessageBox.warning(self, "Ошибка", "У вас нет прав на чтение этого файла.")
             return
@@ -116,9 +116,3 @@ class FileManagerWindow(QMainWindow):
 
         result = cursor.fetchone()
         return result and result[0]
-
-    @staticmethod
-    def parse_selected_item(item_text):
-        """Разбирает текст элемента списка файлов."""
-        file_id, filename = item_text.split(": ", 1)
-        return int(file_id), filename

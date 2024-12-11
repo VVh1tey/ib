@@ -118,7 +118,7 @@ class RegistrationWindow(QMainWindow):
             # Сохраняем пользователя через класс User
             user.save(self.db_connection)
             QMessageBox.information(self, "Успех", "Вы успешно зарегистрировались!")
-            self.close()
+            self.handle_back()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при регистрации: {e}")
 
