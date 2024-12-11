@@ -1,13 +1,14 @@
-from PyQt6.QtWidgets import QMainWindow, QLabel, QVBoxLayout, QListWidget, QPushButton, QWidget, QMessageBox
+from PyQt6.QtWidgets import QMainWindow, QLabel, QVBoxLayout, QListWidget, QPushButton, QWidget, QMessageBox, QTextEdit, QLineEdit, QCheckBox, QSpinBox
 from src.db_interactions import DatabaseConnection
-
+import os
 
 class FileManagerWindow(QMainWindow):
-    def __init__(self, db_connection, user_id, username):
+    def __init__(self, db_connection, user_id, username, main_menu_window):
         super().__init__()
         self.db_connection = db_connection
         self.user_id = user_id
         self.username = username
+        self.main_menu_window = main_menu_window
         self.init_ui()
 
     def init_ui(self):
@@ -41,24 +42,48 @@ class FileManagerWindow(QMainWindow):
 
         # Загрузка доступных файлов
         self.load_files()
+        
+        # Кнопка "Назад"
+        self.back_button = QPushButton("Назад", self)
+        self.back_button.clicked.connect(self.go_back)
+        layout.addWidget(self.back_button)
 
-    # def load_files(self):
-    #     """Загружает список доступных файлов для пользователя."""
-    #     cursor = self.db_connection.cursor
-    #     cursor.execute("""
-    #         SELECT f.fileid, f.filename 
-    #         FROM files f
-    #         JOIN permissions p ON f.fileid = p.file_id
-    #         WHERE p.user_id = %s AND (p.can_read OR p.can_edit OR p.can_copy)
-    #     """, (self.user_id,))
-    #     files = cursor.fetchall()
+        self.manage_roles_button = QPushButton("Управление ролями", self)
+        self.manage_roles_button.clicked.connect(self.open_role_management)
+        layout.addWidget(self.manage_roles_button)
+        
+         # Проверка права на редактирование ролей
+        if not self.check_edit_roles_permission():
+            self.manage_roles_button.setEnabled(False)  # Отключаем кнопку, если права отсутствуют
+        
 
-    #     # Очистка списка и добавление файлов
-    #     self.file_list.clear()
-    #     for file_id, filename in files:
-    #         self.file_list.addItem(f"{file_id}: {filename}")
+
+        self.load_files()
+
+    def go_back(self):
+        """Возвращает в меню логина."""
+        self.close()
+        self.main_menu_window.show()
+
     def load_files(self):
-        self.file_list.addItem('123')
+        """Загружает список доступных файлов для пользователя."""
+        cursor = self.db_connection.cursor
+        cursor.execute("""
+                                               SELECT ul.security_level FROM users_levels ul WHERE ul.user_id = %s
+                                               """, (self.user_id, ))
+        user_permission_level = cursor.fetchall()
+        
+        cursor.execute("""
+            SELECT f.file_id, f.filename, f.security_level 
+            FROM files f
+            WHERE f.security_level >= %s 
+        """, (user_permission_level,))
+        files = cursor.fetchall()
+
+        # Очистка списка и добавление файлов
+        self.file_list.clear()
+        for file_id, filename, security_level  in files:
+            self.file_list.addItem(f"{filename}")
 
     def open_file(self):
         """Открытие файла для чтения."""
@@ -67,14 +92,36 @@ class FileManagerWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", "Выберите файл!")
             return
 
+        # Получаем имя файла из списка
         filename = selected_item.text()
-        file_id = self.db_connection.get_fileid(filename)
-        
-        if not self.check_permission(file_id, "read"):
+
+        # Запрашиваем file_id из таблицы files по имени файла
+        cursor = self.db_connection.cursor
+        cursor.execute("SELECT file_id FROM files WHERE filename = %s", (filename,))
+        result = cursor.fetchone()
+        if not result:
+            QMessageBox.warning(self, "Ошибка", f"Файл {filename} не найден в базе данных!")
+            return
+
+        file_id = result[0]
+
+        # Проверка прав на чтение
+        if not self.check_permission("read", filename):
             QMessageBox.warning(self, "Ошибка", "У вас нет прав на чтение этого файла.")
             return
 
-        QMessageBox.information(self, "Открытие файла", f"Файл {filename} успешно открыт!")
+        # Чтение содержимого файла
+        try:
+            with open(f'lab3/files/{filename}', "r", encoding="utf-8") as file:
+                file_content = file.read()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл {filename}: {e}")
+            return
+
+        # Открытие окна для просмотра
+        self.file_read_window = FileReadWindow(filename, file_content)
+        self.file_read_window.show()
+
 
     def edit_file(self):
         """Открытие файла для редактирования."""
@@ -83,36 +130,258 @@ class FileManagerWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", "Выберите файл!")
             return
 
-        file_id, filename = self.parse_selected_item(selected_item.text())
-        if not self.check_permission(file_id, "edit"):
+        # Получаем имя файла из списка
+        filename = selected_item.text()
+
+        # Запрашиваем file_id из таблицы files по имени файла
+        cursor = self.db_connection.cursor
+        cursor.execute("SELECT file_id FROM files WHERE filename = %s", (filename,))
+        result = cursor.fetchone()
+        if not result:
+            QMessageBox.warning(self, "Ошибка", f"Файл {filename} не найден в базе данных!")
+            return
+
+        file_id = result[0]
+
+        # Проверка прав на редактирование
+        if not self.check_permission("edit", filename):
             QMessageBox.warning(self, "Ошибка", "У вас нет прав на редактирование этого файла.")
             return
 
-        QMessageBox.information(self, "Редактирование файла", f"Файл {filename} открыт для редактирования!")
-
-    def copy_file(self):
-        """Копирование файла."""
-        selected_item = self.file_list.currentItem()
-        if not selected_item:
-            QMessageBox.warning(self, "Ошибка", "Выберите файл!")
+        # Чтение содержимого файла
+        try:
+            with open(f'lab3/files/{filename}', "r", encoding="utf-8") as file:
+                file_content = file.read()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл {filename}: {e}")
             return
 
-        file_id, filename = self.parse_selected_item(selected_item.text())
-        if not self.check_permission(file_id, "copy"):
-            QMessageBox.warning(self, "Ошибка", "У вас нет прав на копирование этого файла.")
-            return
+        # Открытие окна для редактирования
+        self.file_edit_window = FileEditWindow(filename, file_content)
+        self.file_edit_window.show()
 
-        QMessageBox.information(self, "Копирование файла", f"Файл {filename} скопирован!")
-
-    def check_permission(self, file_id, action):
+    def check_permission(self, action, filename):
         """Проверка прав пользователя на файл."""
-        cursor = self.db_connection.cursor
-        if action == "read":
-            cursor.execute("SELECT can_read FROM permissions WHERE user_id = %s AND file_id = %s", (self.user_id, file_id))
-        elif action == "edit":
-            cursor.execute("SELECT can_edit FROM permissions WHERE user_id = %s AND file_id = %s", (self.user_id, file_id))
-        elif action == "copy":
-            cursor.execute("SELECT can_copy FROM permissions WHERE user_id = %s AND file_id = %s", (self.user_id, file_id))
 
+        cursor = self.db_connection.cursor
+        cursor.execute("SELECT security_level FROM files WHERE filename = %s", (filename, ))
+        file_sl = cursor.fetchone()[0]
+        print(file_sl)
+        cursor.execute("SELECT security_level FROM users_levels WHERE user_id = %s", (self.username, ))
+        user_sl = cursor.fetchone()[0]
+        if action == "read":
+            if user_sl <= file_sl:
+                cursor.execute("SELECT can_read FROM user_permissions WHERE user_id = %s ", (self.user_id, ))
+            else:
+                return False
+        elif action == "edit":
+            if user_sl >= file_sl:
+                cursor.execute("SELECT can_edit FROM user_permissions WHERE user_id = %s", (self.user_id, ))
+            else:
+                return False
         result = cursor.fetchone()
         return result and result[0]
+
+    def open_role_management(self):
+        """Открывает окно управления ролями, если у пользователя есть соответствующие права."""
+        cursor = self.db_connection.cursor
+        cursor.execute("SELECT can_edit_roles FROM user_permissions WHERE user_id = %s", (self.user_id,))
+        result = cursor.fetchone()
+
+        if result and result[0]:
+            self.role_management_window = RoleManagementWindow(self.db_connection)
+            self.role_management_window.show()
+        else:
+            QMessageBox.warning(self, "Ошибка", "У вас нет прав на управление ролями.")
+    
+    
+    def check_edit_roles_permission(self):
+        """Проверяет, есть ли у пользователя право на изменение ролей."""
+        cursor = self.db_connection.cursor
+        cursor.execute("SELECT can_edit_roles FROM user_permissions WHERE user_id = %s", (self.user_id,))
+        result = cursor.fetchone()
+        return result and result[0] 
+
+
+class FileEditWindow(QMainWindow):
+    def __init__(self, filename, file_content):
+        super().__init__()
+        self.filename = filename
+        self.file_content = file_content
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle(f"Редактирование файла: {self.filename}")
+        self.setGeometry(300, 300, 600, 400)
+
+        # Основной виджет
+        central_widget = QWidget(self)
+        self.setCentralWidget(central_widget)
+
+        # Компоновка
+        layout = QVBoxLayout()
+        central_widget.setLayout(layout)
+
+        # Виджет текста
+        self.text_edit = QTextEdit(self)
+        self.text_edit.setPlainText(self.file_content)  # Загружаем содержимое файла
+        layout.addWidget(self.text_edit)
+
+        # Кнопка сохранения
+        self.save_button = QPushButton("Сохранить", self)
+        self.save_button.clicked.connect(self.save_file)
+        layout.addWidget(self.save_button)
+
+    def save_file(self):
+        """Сохраняет изменения в файл."""
+        try:
+            with open(f'lab3/files/{self.filename}', "w", encoding="utf-8") as file:
+                file.write(self.text_edit.toPlainText())
+            QMessageBox.information(self, "Успех", f"Файл {self.filename} успешно сохранён!")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при сохранении файла: {e}")
+    
+class FileReadWindow(QMainWindow):
+    def __init__(self, filename, file_content):
+        super().__init__()
+        self.filename = filename
+        self.file_content = file_content
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle(f"Просмотр файла: {self.filename}")
+        self.setGeometry(300, 300, 600, 400)
+
+        # Основной виджет
+        central_widget = QWidget(self)
+        self.setCentralWidget(central_widget)
+
+        # Компоновка
+        layout = QVBoxLayout()
+        central_widget.setLayout(layout)
+
+        # Виджет текста
+        self.text_display = QTextEdit(self)
+        self.text_display.setPlainText(self.file_content)  # Загружаем содержимое файла
+        self.text_display.setReadOnly(True)  # Запрещаем редактирование
+        layout.addWidget(self.text_display)
+
+        # Кнопка закрытия окна
+        self.close_button = QPushButton("Закрыть", self)
+        self.close_button.clicked.connect(self.close)
+        layout.addWidget(self.close_button)
+        
+
+class RoleManagementWindow(QMainWindow):
+    def __init__(self, db_connection):
+        super().__init__()
+        self.db_connection = db_connection
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("Управление правами и уровнями доступа")
+        self.setGeometry(300, 300, 600, 400)
+
+        central_widget = QWidget(self)
+        self.setCentralWidget(central_widget)
+
+        layout = QVBoxLayout()
+        central_widget.setLayout(layout)
+
+        # Поле для ввода логина пользователя или имени файла
+        self.input_label = QLabel("Введите логин пользователя или имя файла:", self)
+        layout.addWidget(self.input_label)
+
+        self.input_field = QLineEdit(self)
+        layout.addWidget(self.input_field)
+
+        # Поля для новых прав
+        self.read_checkbox = QCheckBox("Чтение (can_read)", self)
+        layout.addWidget(self.read_checkbox)
+
+        self.edit_checkbox = QCheckBox("Редактирование (can_edit)", self)
+        layout.addWidget(self.edit_checkbox)
+
+        self.copy_checkbox = QCheckBox("Копирование (can_copy)", self)
+        layout.addWidget(self.copy_checkbox)
+
+        self.edit_roles_checkbox = QCheckBox("Изменение ролей (can_edit_user_roles)", self)
+        layout.addWidget(self.edit_roles_checkbox)
+
+        # Поле для уровня доступа
+        self.level_label = QLabel("Уровень доступа (1, 2, 3):", self)
+        layout.addWidget(self.level_label)
+
+        self.security_level_input = QSpinBox(self)
+        self.security_level_input.setRange(1, 3)
+        layout.addWidget(self.security_level_input)
+
+        # Кнопка сохранения
+        self.save_button = QPushButton("Сохранить", self)
+        self.save_button.clicked.connect(self.update_permissions_and_level)
+        layout.addWidget(self.save_button)
+
+    def update_permissions_and_level(self):
+        """Обновляет права и уровень доступа для пользователя или файла."""
+        input_value = self.input_field.text().strip()
+        new_security_level = self.security_level_input.value()
+
+        # Проверка наличия ввода
+        if not input_value:
+            QMessageBox.warning(self, "Ошибка", "Введите логин пользователя или имя файла!")
+            return
+
+        # Получение значений прав
+        can_read = self.read_checkbox.isChecked()
+        can_edit = self.edit_checkbox.isChecked()
+        can_copy = self.copy_checkbox.isChecked()
+        can_edit_roles = self.edit_roles_checkbox.isChecked()
+
+        cursor = self.db_connection.cursor
+
+        try:
+            # Проверка: это пользователь или файл
+            user_result = self.db_connection.get_userid(input_value)
+
+            if user_result:
+                user_id = user_result[0]
+
+                # Обновление прав пользователя
+                cursor.execute("""
+                    UPDATE user_permissions
+                    SET can_read = %s, can_edit = %s, can_copy = %s, can_edit_roles = %s
+                    WHERE user_id = %s
+                """, (can_read, can_edit, can_copy, can_edit_roles, user_id))
+
+                # Обновление уровня доступа пользователя
+                cursor.execute("""
+                    UPDATE users_levels
+                    SET security_level = %s
+                    WHERE user_id = %s
+                """, (new_security_level, user_id))
+
+                self.db_connection.conn.commit()
+                QMessageBox.information(self, "Успех", f"Права и уровень доступа пользователя с ID {user_id} обновлены.")
+            else:
+                # Проверка: это файл
+                cursor.execute("SELECT file_id FROM files WHERE filename = %s", (input_value,))
+                file_result = cursor.fetchone()
+
+                if file_result:
+                    file_id = file_result[0]
+
+                    # Обновление уровня доступа файла
+                    cursor.execute("""
+                        UPDATE files
+                        SET security_level = %s
+                        WHERE file_id = %s
+                    """, (new_security_level, file_id))
+
+                    self.db_connection.conn.commit()
+                    QMessageBox.information(self, "Успех", f"Уровень доступа файла {input_value} обновлен.")
+                else:
+                    QMessageBox.warning(self, "Ошибка", "Пользователь или файл не найдены!")
+        except Exception as e:
+            self.db_connection.conn.rollback()
+            QMessageBox.critical(self, "Ошибка", f"Не удалось обновить права или уровень доступа: {e}")
+

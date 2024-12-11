@@ -31,6 +31,17 @@ class DatabaseConnection:
         self.cursor.close()
         self.conn.close()
         
+    def add_new_file(self, file_id, filename, security_level):
+        try: 
+            self.cursor_execute("""
+                                INSERT INTO files VALUES
+                                (%s, %s, %s);
+                                """, (file_id, filename, security_level))
+            self.conn.commit()
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+        
 
 class User:
     def __init__(self, login="", password="", email="", first_name="", last_name="", second_name="", address="", password_hash="", salt=""):

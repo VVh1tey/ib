@@ -83,7 +83,7 @@ class LoginWindow(QMainWindow):
     
     def open_file_manager(self, user_id, username):
         """Открытие окна управления файлами."""
-        self.file_manager_window = FileManagerWindow(self.db_connection, user_id, username)
+        self.file_manager_window = FileManagerWindow(self.db_connection, user_id, username, self.main_menu_window)
         self.file_manager_window.show()
         self.close()
 
