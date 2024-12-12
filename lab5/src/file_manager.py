@@ -4,9 +4,65 @@ from src.db_interactions import DatabaseConnection
 
 from cryptography.fernet import Fernet
 import hashlib
+import zipfile
+import pyminizip
 
 from datetime import datetime
 import os
+
+def get_archive_password(db_connection, filename):
+    cursor = db_connection.cursor
+    cursor.execute("""
+                   SELECT archive_password FROM files_lab5 WHERE filename = %s
+                   """, (filename, ))
+    stored_pass = cursor.fetchone()[0]
+    
+    return stored_pass
+
+def set_archive_password(db_connection, file_id, new_password):
+    cursor = db_connection.cursor
+    try:
+        cursor.execute("""
+                        UPDATE files_lab5
+                        SET archive_password = %s
+                        WHERE filename = %s
+                    """, (new_password, file_id,))
+        db_connection.conn.commit()
+    except Exception as e:
+        QMessageBox.critical(self, "Ошибка", f"Произошла ошибка при создании файла: {e}")
+        return
+
+def create_password_protected_zip(filename, db_connection, username):
+    """
+    Создаёт защищённый паролем ZIP-архив из файла с указанным именем.
+
+    :param filename: Имя файла, который нужно заархивировать.
+    :param password: Пароль для защиты архива.
+    :param compress_level: Уровень компрессии (от 1 до 9, где 9 - максимальная компрессия).
+    """
+    input_file_path = f'lab5/tmp/{filename}.secret'
+    output_zip_path = f'lab5/files/{filename}.zip'
+    compress_level=9
+    password = username
+    try:
+        pyminizip.compress(
+            input_file_path,
+            None,
+            output_zip_path,
+            password,
+            compress_level
+        )
+        print(f"Архив {output_zip_path} успешно создан.")
+    except Exception as e:
+        print(f"Произошла ошибка при создании архива: {e}")
+
+    set_archive_password(db_connection, filename, username)
+
+def unzip_protected(filename, out_dir, db_connection):
+    input_file_path = f'lab5/files/{filename}.zip'
+    password = get_archive_password(db_connection, filename)
+    pyminizip.uncompress(input_file_path, password, out_dir, 1)
+
 
 def hash_modification_time(filepath):
     """
@@ -20,7 +76,7 @@ def hash_modification_time(filepath):
         print(f"Ошибка при вычислении хэша времени модификации файла: {e}")
         return None
 
-def verify_modification_time_hash(db_connection, file_id, filepath):
+def verify_modification_time_hash(db_connection, filename, filepath):
     """
     Проверяет, совпадает ли хэш времени модификации файла с сохраненным в базе данных.
     """
@@ -29,7 +85,7 @@ def verify_modification_time_hash(db_connection, file_id, filepath):
         return False
 
     cursor = db_connection.cursor
-    cursor.execute("SELECT file_hash FROM files_lab4 WHERE file_id = %s", (file_id,))
+    cursor.execute("SELECT file_hash FROM files_lab5 WHERE filename = %s", (file_id,))
     stored_hash = cursor.fetchone()
     if not stored_hash or current_hash != stored_hash[0]:
         return False
@@ -153,7 +209,7 @@ class FileManagerWindow(QMainWindow):
         
         cursor.execute("""
             SELECT f.file_id, f.filename, f.security_level 
-            FROM files_lab4 f
+            FROM files_lab5 f
             WHERE f.security_level >= %s 
         """, (user_permission_level,))
         files = cursor.fetchall()
@@ -172,45 +228,68 @@ class FileManagerWindow(QMainWindow):
 
         # Получаем имя файла из списка
         filename = selected_item.text()
-        filepath = f"lab4/files/{filename}.secret"
 
-        # Запрашиваем file_id из таблицы files по имени файла
+        # Проверяем наличие файла в базе данных
         cursor = self.db_connection.cursor
-        cursor.execute("SELECT file_id FROM files_lab4 WHERE filename = %s", (filename,))
+        cursor.execute("SELECT file_id, archive_password FROM files_lab5 WHERE filename = %s", (filename,))
         result = cursor.fetchone()
         if not result:
             QMessageBox.warning(self, "Ошибка", f"Файл {filename} не найден в базе данных!")
             return
 
-        file_id = result[0]
+        file_id, archive_password = result
 
         # Проверка прав на чтение
         if not self.check_permission("read", filename):
             QMessageBox.warning(self, "Ошибка", "У вас нет прав на чтение этого файла.")
             return
 
-        # Изменяем расширение файла для работы
-        temp_filepath = change_file_extension(filepath, ".txt")
+        try:
+            # Шаг 1: Разархивация файла
+            input_zip_path = f"lab5/files/{filename}.zip"
+            temp_dir = "lab5/tmp/"
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_filepath = os.path.join(temp_dir, f"{filename}.secret")
 
-        # Проверяем хэш времени модификации
-        if not verify_modification_time_hash(self.db_connection, file_id, temp_filepath):
-            QMessageBox.critical(self, "Ошибка", "Целостность файла нарушена!")
-            change_file_extension(temp_filepath, ".secret")
-            return
+            print(f"Разархивация: {input_zip_path} -> {temp_dir}")
+            unzip_protected(filename, temp_dir, self.db_connection)
+            print(os.path.list('lab5/files/'))
+            # print(os.path.realpath())
+            # Проверяем, был ли успешно создан временный файл
+            if not os.path.exists(temp_filepath):
+                raise FileNotFoundError(f"Файл {temp_filepath} не найден после разархивации.")
 
-        # Дешифруем файл
-        key = load_key()
-        decrypted_data = decrypt_file(temp_filepath, key)
-        if decrypted_data is None:
-            change_file_extension(temp_filepath, ".secret")
-            return
+            # Шаг 2: Проверяем хэш времени модификации
+            print(f"Проверка хэша времени модификации для файла: {temp_filepath}")
+            if not verify_modification_time_hash(self.db_connection, filename, temp_filepath):
+                QMessageBox.critical(self, "Ошибка", "Целостность файла нарушена!")
+                if os.path.exists(temp_filepath):
+                    os.remove(temp_filepath)
+                return
 
-        # Открытие окна для чтения
-        self.file_read_window = FileReadWindow(filename, decrypted_data)
-        self.file_read_window.show()
+            # Шаг 3: Дешифруем файл
+            print(f"Дешифрование файла: {temp_filepath}")
+            key = load_key()
+            decrypted_data = decrypt_file(temp_filepath, key)
+            if decrypted_data is None:
+                if os.path.exists(temp_filepath):
+                    os.remove(temp_filepath)
+                return
 
-        # Восстанавливаем расширение
-        change_file_extension(temp_filepath, ".secret")
+            # Шаг 4: Открытие окна для чтения
+            print(f"Открытие окна для чтения: {filename}")
+            self.file_read_window = FileReadWindow(filename, decrypted_data)
+            self.file_read_window.show()
+
+            # Удаление временного файла
+            print(f"Удаление временного файла: {temp_filepath}")
+            if os.path.exists(temp_filepath):
+                os.remove(temp_filepath)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при открытии файла: {e}")
+
+
 
     def edit_file(self):
         """Открытие файла для редактирования."""
@@ -225,7 +304,7 @@ class FileManagerWindow(QMainWindow):
 
         # Запрашиваем file_id из таблицы files по имени файла
         cursor = self.db_connection.cursor
-        cursor.execute("SELECT file_id FROM files_lab4 WHERE filename = %s", (filename,))
+        cursor.execute("SELECT file_id FROM files_lab5 WHERE filename = %s", (filename,))
         result = cursor.fetchone()
         if not result:
             QMessageBox.warning(self, "Ошибка", f"Файл {filename} не найден в базе данных!")
@@ -265,9 +344,8 @@ class FileManagerWindow(QMainWindow):
         """Проверка прав пользователя на файл."""
 
         cursor = self.db_connection.cursor
-        cursor.execute("SELECT security_level FROM files_lab4 WHERE filename = %s", (filename, ))
+        cursor.execute("SELECT security_level FROM files_lab5 WHERE filename = %s", (filename, ))
         file_sl = cursor.fetchone()[0]
-        print(file_sl)
         cursor.execute("SELECT security_level FROM users_levels WHERE user_id = %s", (self.username, ))
         user_sl = cursor.fetchone()[0]
         if action == "read":
@@ -355,9 +433,9 @@ class FileManagerWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось удалить файл: {e}")
             
 
-        # Удаляем запись из таблицы files_lab4
+        # Удаляем запись из таблицы files_lab5
         cursor = self.db_connection.cursor
-        cursor.execute("DELETE FROM files_lab4 WHERE filename = %s", (filename,))
+        cursor.execute("DELETE FROM files_lab5 WHERE filename = %s", (filename,))
         self.db_connection.conn.commit()
 
         # Обновляем список файлов
@@ -415,7 +493,7 @@ class FileEditWindow(QMainWindow):
             cursor = self.db_connection.cursor
             cursor.execute(
                 """
-                UPDATE files_lab4
+                UPDATE files_lab5
                 SET file_hash = %s
                 WHERE filename = %s
                 """,
@@ -554,7 +632,7 @@ class RoleManagementWindow(QMainWindow):
                 QMessageBox.information(self, "Успех", f"Права и уровень доступа пользователя с ID {user_id} обновлены.")
             else:
                 # Проверка: это файл
-                cursor.execute("SELECT file_id FROM files_lab4 WHERE filename = %s", (input_value,))
+                cursor.execute("SELECT file_id FROM files_lab5 WHERE filename = %s", (input_value,))
                 file_result = cursor.fetchone()
 
                 if file_result:
@@ -643,33 +721,43 @@ class CreateFileWindow(QMainWindow):
         if not filename or not file_content:
             QMessageBox.warning(self, "Ошибка", "Пожалуйста, заполните все поля.")
             return
-        
+
         try:
-            
-            # Сохранение зашифрованного файла
-            filepath = f"lab4/files/{filename}.secret"
+            # Шаг 1: Сохранение зашифрованного файла
+            tmp_dir = "lab5/tmp"
+            os.makedirs(tmp_dir, exist_ok=True)
+            filepath = os.path.join(tmp_dir, f"{filename}.secret")
+
             with open(filepath, 'w', encoding='utf-8') as file:
                 file.write(file_content)
 
-            # Шифруем данные
-            key = load_key()
-            encrypted_data = encrypt_file(filepath, key)
-            
-            # Генерация хэша времени изменения
+            # Шаг 2: Шифруем файл
+            key = load_key()  # Загружаем ключ шифрования
+            encrypt_file(filepath, key)  # Шифруем файл на месте
+
+            # Шаг 3: Генерация хэша времени изменения
             modification_time_hash = hash_modification_time(filepath)
 
-            # Вставка информации о файле в базу данных
+            # Шаг 4: Создание защищённого ZIP-архива
+            create_password_protected_zip(filename, self.db_connection, self.parent.username)
+
+            # Шаг 5: Вставка информации о файле в базу данных
             cursor = self.db_connection.cursor
             cursor.execute(
                 """
-                INSERT INTO files_lab4 (filename, security_level, file_hash)
-                VALUES (%s, %s, %s);
+                INSERT INTO files_lab5 (filename, security_level, file_hash, archive_password)
+                VALUES (%s, %s, %s, %s);
                 """,
-                (filename, security_level, modification_time_hash, ),
+                (filename, security_level, modification_time_hash, self.parent.username),
             )
             self.db_connection.conn.commit()
 
-            QMessageBox.information(self, "Успех", "Файл успешно создан!")
+            # Очистка временного файла
+            print(filepath)
+            if os.path.exists(filepath):
+                os.remove(filepath)
+
+            QMessageBox.information(self, "Успех", "Файл успешно создан и помещён в архив!")
             self.close_and_return_to_parent()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка при создании файла: {e}")

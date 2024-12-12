@@ -43,11 +43,6 @@ class FileManagerWindow(QMainWindow):
         # Загрузка доступных файлов
         self.load_files()
         
-        # Кнопка "Назад"
-        self.back_button = QPushButton("Назад", self)
-        self.back_button.clicked.connect(self.go_back)
-        layout.addWidget(self.back_button)
-
         self.manage_roles_button = QPushButton("Управление ролями", self)
         self.manage_roles_button.clicked.connect(self.open_role_management)
         layout.addWidget(self.manage_roles_button)
@@ -56,7 +51,15 @@ class FileManagerWindow(QMainWindow):
         if not self.check_edit_roles_permission():
             self.manage_roles_button.setEnabled(False)  # Отключаем кнопку, если права отсутствуют
         
-
+        # Кнопка "Создать файл"
+        self.create_button = QPushButton("Создать файл", self)
+        self.create_button.clicked.connect(self.create_file)
+        layout.addWidget(self.create_button)
+        
+        # Кнопка "Назад"
+        self.back_button = QPushButton("Назад", self)
+        self.back_button.clicked.connect(self.go_back)
+        layout.addWidget(self.back_button)
 
         self.load_files()
 
@@ -122,7 +125,25 @@ class FileManagerWindow(QMainWindow):
         self.file_read_window = FileReadWindow(filename, file_content)
         self.file_read_window.show()
 
+    def create_file(self):
+        """Открывает окно для создания нового файла."""
+        cursor = self.db_connection.cursor
+        cursor.execute("""
+                    SELECT ul.security_level FROM users_levels ul WHERE ul.user_id = %s
+                    """, (self.username, ))
+        user_permission_level = cursor.fetchone()[0]
 
+        if self.check_create_files_permission():
+            self.create_file_window = CreateFileWindow(parent=self,
+                                                    db_connection=self.db_connection,
+                                                    user_id=self.user_id,
+                                                    level=user_permission_level)
+            self.create_file_window.show()
+        else:
+            QMessageBox.warning(self, "Ошибка", "У вас нет прав на создание файлов.")
+            return
+
+        
     def edit_file(self):
         """Открытие файла для редактирования."""
         selected_item = self.file_list.currentItem()
@@ -202,6 +223,13 @@ class FileManagerWindow(QMainWindow):
         result = cursor.fetchone()
         return result and result[0] 
 
+    def check_create_files_permission(self):
+        """Проверяет, есть ли у пользователя право на создание файлов."""
+        cursor = self.db_connection.cursor
+        cursor.execute("SELECT can_create FROM user_permissions WHERE user_id = %s", (self.user_id,))
+        result = cursor.fetchone()
+        return result and result[0] 
+
 
 class FileEditWindow(QMainWindow):
     def __init__(self, filename, file_content):
@@ -270,7 +298,98 @@ class FileReadWindow(QMainWindow):
         self.close_button = QPushButton("Закрыть", self)
         self.close_button.clicked.connect(self.close)
         layout.addWidget(self.close_button)
-        
+
+class CreateFileWindow(QMainWindow):
+    def __init__(self, parent=None, db_connection=None, user_id=None, level=None):
+        super().__init__()
+        self.parent = parent
+        self.db_connection = db_connection
+        self.user_id = user_id
+        self.level = level
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("Создание файла")
+        self.setGeometry(300, 300, 600, 400)
+
+        # Центральный виджет
+        central_widget = QWidget(self)
+        self.setCentralWidget(central_widget)
+
+        # Главная компоновка
+        layout = QVBoxLayout()
+        central_widget.setLayout(layout)
+
+        # Поле для ввода содержимого файла
+        self.content_textedit = QTextEdit(self)
+        content_label = QLabel("Содержание файла:")
+        layout.addWidget(content_label)
+        layout.addWidget(self.content_textedit)
+
+        # Уровень секретности файла
+        self.level_spinbox = QSpinBox(self)
+        self.level_spinbox.setRange(1, int(self.level))
+        self.level_spinbox.setValue(int(self.level))
+        level_label = QLabel("Уровень доступа (1, 2, 3):")
+        layout.addWidget(level_label)
+        layout.addWidget(self.level_spinbox)
+
+        # Имя файла
+        self.filename_lineedit = QLineEdit(self)
+        filename_label = QLabel("Имя файла:")
+        layout.addWidget(filename_label)
+        layout.addWidget(self.filename_lineedit)
+
+        # Кнопки Создать и Назад
+        create_button = QPushButton("Создать", self)
+        back_button = QPushButton("Назад", self)
+
+        # Событие при нажатии на кнопку "Создать"
+        create_button.clicked.connect(self.save_file)
+
+        # Событие при нажатии на кнопку "Назад"
+        back_button.clicked.connect(self.close_and_return_to_parent)
+
+        # Компоновка кнопок
+        button_layout = QVBoxLayout()
+        button_layout.addStretch()  # Центрируем кнопки
+        button_layout.addWidget(create_button)
+        button_layout.addWidget(back_button)
+
+        # Добавляем компоновку кнопок в главную компоновку
+        layout.addLayout(button_layout)
+
+
+    def save_file(self):
+        file_content = self.content_textedit.toPlainText()
+        security_level = self.level_spinbox.value()
+        filename = self.filename_lineedit.text().strip()
+
+        if not filename or not file_content:
+            QMessageBox.warning(self, "Ошибка", "Пожалуйста, заполните все поля.")
+            return
+
+        try:
+            cursor = self.db_connection.cursor
+            cursor.execute(
+                """
+                INSERT INTO files (filename, security_level)
+                VALUES (%s, %s);
+                """,
+                (filename, security_level, ),
+            )
+            self.db_connection.conn.commit()
+            
+            with open(os.path.join('lab3/files', filename), 'w') as file:
+                file.write(file_content)
+            QMessageBox.information(self, "Успех", "Файл успешно создан!")
+            self.close_and_return_to_parent()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка при создании файла: {e}")
+
+    def close_and_return_to_parent(self):
+        self.close()
+        self.parent.load_files()  # Обновление списка файлов после создания нового
 
 class RoleManagementWindow(QMainWindow):
     def __init__(self, db_connection):
